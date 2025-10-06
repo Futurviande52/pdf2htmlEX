@@ -1,6 +1,9 @@
 import shutil
 
 import pytest
+
+pytest.importorskip("httpx")
+
 from fastapi.testclient import TestClient
 
 from app import app
@@ -42,6 +45,7 @@ def test_pdf2html_b64_success():
     assert data["request_id"] == "test"
     assert data["metrics"]["pages"] >= 1
     assert "html" in data
+    assert "html_semantic" in data
     assert data["html"].lower().startswith("<!doctype")
 
 
@@ -49,3 +53,8 @@ def test_validation_error_when_missing_sources():
     response = client.post("/pdf2html", json={})
     assert response.status_code == 422
     assert response.json()["detail"]
+
+
+def test_alias_endpoint_uses_same_handler():
+    response = client.post("/pdf2htmlex", json={})
+    assert response.status_code == 422
