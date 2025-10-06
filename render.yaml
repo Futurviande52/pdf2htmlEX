@@ -1,7 +1,12 @@
 services:
   - type: web
-    name: pdf2htmlx-service
-    env: docker
-    plan: free
+    name: pdf2htmlex
+    env: python
+    region: frankfurt
+    rootDirectory: pdf2htmlex-service
+    buildCommand: pip install --upgrade pip setuptools wheel && pip install --no-cache-dir -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
     autoDeploy: true
-    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9

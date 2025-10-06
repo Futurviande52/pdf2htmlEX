@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
+from starlette.responses import PlainTextResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, HttpUrl
 import base64, requests, html as html_mod
@@ -36,7 +37,6 @@ def _load_pdf_bytes(body: Pdf2HtmlIn) -> bytes:
         return r.content
     raise HTTPException(status_code=400, detail="Provide pdf_b64 or pdf_url")
 
-# On accepte /pdf2html ET /pdf2htmlex
 @app.post("/pdf2html")
 @app.post("/pdf2htmlex")
 def pdf2html(payload: Pdf2HtmlIn):
