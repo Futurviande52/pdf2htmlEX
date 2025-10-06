@@ -1,204 +1,65 @@
-"""FastAPI microservice to convert PDFs to HTML using pdf2htmlEX."""
-from __future__ import annotations
-
-import base64
-import binascii
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, HttpUrl
+import base64, requests, html as html_mod
+import fitz  # PyMuPDF
 import logging
-import re
-import subprocess
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Tuple
-
-import requests
-from fastapi import FastAPI, HTTPException, status
-from pydantic import BaseModel, HttpUrl, field_validator, model_validator
 
 logger = logging.getLogger("uvicorn.error")
 
-DEFAULT_FILENAME = "document.pdf"
-HTML_OUTPUT_NAME = "out.html"
-PDF2HTMLEX_TIMEOUT = 180
-PDF_DOWNLOAD_TIMEOUT = 60
-PDF2HTMLEX_CMD = [
-    "pdf2htmlEX",
-    "--split-pages",
-    "0",
-    "--embed-css",
-    "1",
-    "--embed-image",
-    "1",
-    "--embed-font",
-    "1",
-    "--process-outline",
-    "1",
-    "--optimize-text",
-    "1",
-]
+app = FastAPI(title="pdf2html-service")
 
+class Pdf2HtmlIn(BaseModel):
+    request_id: str | None = None
+    filename: str | None = None
+    pdf_b64: str | None = None
+    pdf_url: HttpUrl | None = None
 
-class ConversionRequest(BaseModel):
-    """Incoming payload for PDF to HTML conversion."""
-
-    request_id: Optional[str] = None
-    filename: Optional[str] = None
-    pdf_b64: Optional[str] = None
-    pdf_url: Optional[HttpUrl] = None
-
-    @model_validator(mode="after")
-    def ensure_source_present(self) -> "ConversionRequest":
-        if not self.pdf_b64 and not self.pdf_url:
-            raise ValueError("One of pdf_b64 or pdf_url must be provided.")
-        return self
-
-    @field_validator("pdf_b64")
-    @classmethod
-    def strip_whitespace(cls, value: Optional[str]) -> Optional[str]:
-        return value.strip() if isinstance(value, str) else value
-
-
-class ConversionResponse(BaseModel):
-    request_id: Optional[str]
-    filename: str
-    metrics: Dict[str, int]
-    html: str
-
-
-app = FastAPI(title="pdf2htmlEX microservice", version="1.0.0")
-
-
-def _decode_pdf_b64(encoded: str) -> bytes:
-    try:
-        return base64.b64decode(encoded, validate=True)
-    except (ValueError, binascii.Error) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid base64 payload provided for pdf_b64.",
-        ) from exc
-
-
-def _fetch_pdf_url(url: HttpUrl) -> Tuple[bytes, Optional[str]]:
-    try:
-        response = requests.get(str(url), timeout=PDF_DOWNLOAD_TIMEOUT)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as exc:
-        logger.warning("Failed to fetch PDF from URL %s: %s", url, exc)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to download PDF from the provided URL.",
-        ) from exc
-
-    filename = Path(response.url).name or None
-    return response.content, filename
-
-
-def _load_pdf_bytes(payload: ConversionRequest) -> Tuple[bytes, Optional[str]]:
-    if payload.pdf_b64:
-        return _decode_pdf_b64(payload.pdf_b64), None
-    if payload.pdf_url:
-        return _fetch_pdf_url(payload.pdf_url)
-    # Should be unreachable due to validator, but keeps type-checkers happy.
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="No PDF source provided.",
-    )
-
-
-def _truncate_message(message: str, limit: int = 4000) -> str:
-    if len(message) <= limit:
-        return message
-    return message[: limit - 3] + "..."
-
-
-def _extract_page_count(*outputs: str) -> Optional[int]:
-    page_pattern = re.compile(r"pages?\s*:?\s*(\d+)", re.IGNORECASE)
-    for output in outputs:
-        if not output:
-            continue
-        match = page_pattern.search(output)
-        if match:
-            try:
-                return int(match.group(1))
-            except ValueError:
-                continue
-    return None
-
+@app.get("/", response_class=PlainTextResponse)
+def root():
+    return "Service OK. Endpoints: GET /health, POST /pdf2html (alias /pdf2htmlex)."
 
 @app.get("/health")
-def healthcheck() -> dict:
-    """Simple health endpoint used by Render and other orchestrators."""
+def health():
     return {"ok": True}
 
-
-@app.post("/pdf2html", response_model=ConversionResponse)
-def convert_pdf(payload: ConversionRequest) -> ConversionResponse:
-    pdf_bytes, inferred_filename = _load_pdf_bytes(payload)
-    target_filename = payload.filename or inferred_filename or DEFAULT_FILENAME
-
-    with TemporaryDirectory(prefix="pdf2htmlx-") as tmpdir:
-        tmp_path = Path(tmpdir)
-        input_pdf = tmp_path / "input.pdf"
-        output_html = tmp_path / HTML_OUTPUT_NAME
-
-        input_pdf.write_bytes(pdf_bytes)
-
-        command = [
-            *PDF2HTMLEX_CMD,
-            "--dest-dir",
-            str(tmp_path),
-            str(input_pdf),
-            HTML_OUTPUT_NAME,
-        ]
-
-        logger.info("Running pdf2htmlEX for request_id=%s", payload.request_id)
+def _load_pdf_bytes(body: Pdf2HtmlIn) -> bytes:
+    if body.pdf_b64:
         try:
-            completed = subprocess.run(  # noqa: S603
-                command,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=PDF2HTMLEX_TIMEOUT,
-                text=True,
-            )
-        except subprocess.TimeoutExpired as exc:
-            logger.error(
-                "pdf2htmlEX timed out after %s seconds for request_id=%s",
-                PDF2HTMLEX_TIMEOUT,
-                payload.request_id,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Conversion timed out.",
-            ) from exc
-        except subprocess.CalledProcessError as exc:
-            stderr_msg = _truncate_message(exc.stderr or "Conversion failed without error output.")
-            logger.error("pdf2htmlEX failed: %s", stderr_msg)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"pdf2htmlEX failed: {stderr_msg}",
-            ) from exc
+            return base64.b64decode(body.pdf_b64, validate=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+    if body.pdf_url:
+        r = requests.get(str(body.pdf_url), timeout=60)
+        r.raise_for_status()
+        return r.content
+    raise HTTPException(status_code=400, detail="Provide pdf_b64 or pdf_url")
 
-        if not output_html.exists():
-            logger.error("Expected HTML output not produced by pdf2htmlEX.")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="pdf2htmlEX did not produce an HTML file.",
-            )
+# On accepte /pdf2html ET /pdf2htmlex
+@app.post("/pdf2html")
+@app.post("/pdf2htmlex")
+def pdf2html(payload: Pdf2HtmlIn):
+    blob = _load_pdf_bytes(payload)
+    doc = fitz.open(stream=blob, filetype="pdf")
+    html_fragments = ["<html><head><meta charset='utf-8'></head><body>"]
+    pages = 0
+    for i, page in enumerate(doc, start=1):
+        pages = i
+        text = page.get_text("text")
+        html_fragments.append(
+            f"<section data-page='{i}'><pre>{html_mod.escape(text)}</pre></section>"
+        )
+    html_fragments.append("</body></html>")
+    doc.close()
+    return {
+        "request_id": payload.request_id,
+        "html_semantic": "\n".join(html_fragments),
+        "metrics": {"pages": pages},
+    }
 
-        html_content = output_html.read_text(encoding="utf-8")
-        html_bytes = len(html_content.encode("utf-8"))
-        pages = _extract_page_count(completed.stdout, completed.stderr)
-
-    metrics: Dict[str, int] = {"html_bytes": html_bytes}
-    if pages is not None:
-        metrics["pages"] = pages
-
-    return ConversionResponse(
-        request_id=payload.request_id,
-        filename=target_filename,
-        metrics=metrics,
-        html=html_content,
-    )
-
-
-__all__ = ["app"]
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    body = (await request.body()).decode("utf-8", errors="ignore")
+    logger.error("422 payload=%s errors=%s", body[:1000], exc.errors())
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
