@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: pdf2htmlx-service
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
