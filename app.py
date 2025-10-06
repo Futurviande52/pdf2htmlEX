@@ -128,6 +128,7 @@ def health() -> dict[str, bool]:
 
 
 @app.post("/pdf2html")
+@app.post("/pdf2htmlex")
 def pdf2html(payload: Pdf2HtmlIn):
     request_id = payload.request_id or str(uuid.uuid4())
     start_ts = time.perf_counter()
@@ -194,11 +195,16 @@ def pdf2html(payload: Pdf2HtmlIn):
             html_output_bytes = zip_buffer.getvalue()
             response_payload = {
                 "html_zip_b64": base64.b64encode(html_output_bytes).decode("utf-8"),
+                "html_semantic": None,
             }
             return_size = len(html_output_bytes)
         else:
             html_output_bytes = html_path.read_bytes()
-            response_payload = {"html": html_output_bytes.decode("utf-8", errors="ignore")}
+            html_text = html_output_bytes.decode("utf-8", errors="ignore")
+            response_payload = {
+                "html": html_text,
+                "html_semantic": html_text,
+            }
             return_size = len(html_output_bytes)
 
     finally:

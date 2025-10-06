@@ -38,9 +38,11 @@ Then visit http://localhost:10000/health or http://localhost:10000/docs.
 4. Render will detect `render.yaml` and build using the included `Dockerfile`.
 5. Deploy. Render requires the application to bind to `0.0.0.0` and the port supplied in the `PORT` environment variable—this service already does that.
 
+Render Python version is set via `PYTHON_VERSION` or `.python-version`. See the [Render documentation](https://render.com/docs/python-version) for details.
+
 ## Example `curl`
 ```bash
-BASE="https://your-service.onrender.com"
+BASE="https://pdf2htmlex.onrender.com"
 curl -X POST "$BASE/pdf2html" \
   -H "Content-Type: application/json" \
   -d '{"request_id":"demo-1","filename":"sample.pdf","pdf_url":"https://example.com/sample.pdf","options":{"embed":"all","returnZipB64":true}}'
