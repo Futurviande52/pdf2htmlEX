@@ -1,12 +1,43 @@
-
-# ==================== ENDPOINT /convert POUR N8N ====================
-# Compatible avec le workflow n8n qui attend { "html_content": "..." }
-
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+import base64
+import requests
 import tempfile
 import os
 import shutil
 import subprocess
 from typing import Optional
+
+# Créer l'application FastAPI
+app = FastAPI(
+    title="PDF to HTML Conversion Service",
+    description="Service de conversion PDF vers HTML utilisant pdf2htmlEX",
+    version="1.0.0"
+)
+
+# ==================== ENDPOINT RACINE ====================
+
+@app.get("/")
+async def root():
+    """Endpoint racine pour vérifier que le service est en ligne"""
+    return {
+        "status": "online",
+        "service": "PDF to HTML Conversion Service",
+        "version": "1.0.0",
+        "endpoints": {
+            "/": "Status check",
+            "/health": "Health check",
+            "/convert": "Convert PDF to HTML (POST)"
+        }
+    }
+
+@app.get("/health")
+async def health():
+    """Health check endpoint pour Render"""
+    return {"status": "healthy"}
+
+# ==================== ENDPOINT /convert POUR N8N ====================
+# Compatible avec le workflow n8n qui attend { "html_content": "..." }
 
 @app.post("/convert")
 async def convert_pdf_to_html_n8n(request: Request):
@@ -122,3 +153,10 @@ async def convert_pdf_to_html_n8n(request: Request):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+# ==================== DÉMARRAGE ====================
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
