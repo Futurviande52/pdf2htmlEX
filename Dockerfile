@@ -15,5 +15,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
 
 COPY . .
 
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-10000}"]
+RUN chmod +x start.sh
+
+CMD ["./start.sh"]
 
