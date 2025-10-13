@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 import base64
+import binascii
+import re
 import requests
 import tempfile
 import os
@@ -14,6 +16,32 @@ app = FastAPI(
     description="Service de conversion PDF vers HTML utilisant pdf2htmlEX",
     version="1.0.0"
 )
+
+# ==================== FONCTION DE VALIDATION ====================
+
+def b64_to_pdf_bytes(s: str) -> bytes:
+    """
+    Valide et décode une chaîne base64 en bytes PDF
+    Lève HTTPException si invalide
+    """
+    # Nettoyer les espaces blancs
+    s = re.sub(r"\s+", "", s or "")
+    
+    # Supprimer le préfixe data: si présent
+    if s.startswith("data:"):
+        s = s.split(",", 1)[-1]
+    
+    # Décoder le base64
+    try:
+        data = base64.b64decode(s, validate=True)
+    except binascii.Error as e:
+        raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+    
+    # Vérifier que c'est bien un PDF
+    if not data.startswith(b"%PDF"):
+        raise HTTPException(status_code=400, detail="Not a PDF (missing %PDF header)")
+    
+    return data
 
 # ==================== ENDPOINT RACINE ====================
 
@@ -33,11 +61,10 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Health check endpoint pour Render"""
+    """Health check endpoint"""
     return {"status": "healthy"}
 
 # ==================== ENDPOINT /convert POUR N8N ====================
-# Compatible avec le workflow n8n qui attend { "html_content": "..." }
 
 @app.post("/convert")
 async def convert_pdf_to_html_n8n(request: Request):
@@ -68,11 +95,8 @@ async def convert_pdf_to_html_n8n(request: Request):
         file_name = data.get('file_name', 'input.pdf')
         
         if data.get('pdf_b64'):
-            # Décoder le base64
-            try:
-                pdf_content = base64.b64decode(data['pdf_b64'])
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+            # Valider et décoder le base64
+            pdf_content = b64_to_pdf_bytes(data['pdf_b64'])
         
         elif data.get('pdf_url'):
             # Télécharger depuis l'URL
@@ -80,12 +104,17 @@ async def convert_pdf_to_html_n8n(request: Request):
                 response = requests.get(data['pdf_url'], timeout=60)
                 response.raise_for_status()
                 pdf_content = response.content
+                
+                # Vérifier que c'est bien un PDF
+                if not pdf_content.startswith(b"%PDF"):
+                    raise HTTPException(status_code=400, detail="Downloaded file is not a valid PDF")
+                
                 # Extraire le nom du fichier de l'URL
                 if not file_name or file_name == "input.pdf":
                     file_name = data['pdf_url'].split('/')[-1]
                     if not file_name.endswith('.pdf'):
                         file_name = 'input.pdf'
-            except Exception as e:
+            except requests.RequestException as e:
                 raise HTTPException(status_code=400, detail=f"Failed to download PDF: {e}")
         
         else:
